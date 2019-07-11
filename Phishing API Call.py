@@ -150,9 +150,9 @@ def test_CSV(split_data,col_headers_nbr):
 int = 1
 # Get token code from profile page on CoFense website.  Is specific to login user
 APItoken=input("Enter API Token:")
-filePath = "\\\\jtclpswermfs01\\ERM\\_Projects\\_Jason Richmond\\File Landing\\"
+filePath = "YOUR PATH HERE"
 
-change = input("The Default file path is: \\\\jtclpswermfs01\\ERM\\_Projects\\_Jason Richmond\\File Landing\\ \nDo you wish to export to a different location? (Yes/No) ")
+change = input("The Default file path is: YOUR PATH HERE \nDo you wish to export to a different location? (Yes/No) ")
 validInput = False
 
 while validInput == False:
