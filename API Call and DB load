@@ -1,0 +1,436 @@
+# -*- coding: utf-8 -*-
+"""
+Created 
+
+Author: 
+Purpose: Open API connection to CoFense website using the users CoFense token in order to download Phishing Data to CSV or TXT
+file.
+
+"""
+from urllib.request import Request, urlopen
+import json
+import urllib.request
+import re
+import string
+import time
+from schema import Schema, And, Use, Optional, SchemaError
+import os
+import pyodbc
+import win32com.client as win32
+import sys
+#import csv
+#import pandas as pd
+#import numpy as np
+#from bs4 import BeautifulSoup
+#import pyparsing as pp
+
+
+
+#######################################################
+#######################################################
+###############   API Call to CoFense #################
+#######################################################
+#######################################################
+def API_Call():
+
+    # Uses users' token generated on CoFense site to open JSON list of URLs containing Phishing Data
+    token = ("Token token=%r" % (APItoken))
+    token = token.replace("'",'"')
+    
+    url = "https://login.phishme.com/api/v1/scenarios.json"
+    request = urllib.request.Request(url)
+    request.add_header('Authorization', token)
+    response = urllib.request.urlopen(request)
+    html = response.read()
+    
+    
+    # uncomment the below if you wish to see the list of files/URLs in the JSON request
+    #print(html)
+    #url_check(Schema, html)
+ 
+
+    # Parses the JSON response to get most current URL for CSV
+    y = json.loads(html)
+    x = y[0]  #[0] will return the top row
+    
+    
+    # Validates headers and data types recevied using Schema below.  Will escape to error handler if not validated
+    Schema.validate(x)
+    #validated = Schema.validate(x)
+    #print(validated)
+    
+    # Uncomment to show URL being passed to pull data
+    #print(x["full_csv_url"])
+      
+    
+    response.close()
+    title = x["title"]
+    recipients = x["recipients"]
+    date = x["date_started"]
+    date = date[0:10]
+
+
+    # Takes the URL for the most current file and opens connection and exports data
+    site= str(x["full_csv_url"])
+    hdr = {'User-Agent': 'Mozilla/5.0'}
+    req = Request(site,headers=hdr)
+    req.add_header('Authorization', token)
+
+    with urlopen(req) as x:
+        data = x.read().decode('utf-8')        
+    #print(data)
+
+    # Export data to CSV file names 
+    print("Connection established.  Downloading Phishing data now.")
+    #print(data)
+    
+    # Strip out trailing new line and all non-printable chars from dataset
+    csv_data = data.rstrip()
+    csv_data = re.sub(r'[^{0}\n]'.format(string.printable), '', csv_data)
+    
+    
+    # print(csv_data)
+    col_headers = data.partition('\n')[0]
+    col_headers = col_headers.replace("/R", "R")
+    
+    #print(col_headers) 
+    
+    split_data = col_headers.split(",")
+     
+    if test_CSV(split_data) == True:
+        
+        filename = "Phishing Data - " + title + ".csv"
+        outputfilename = os.path.join(filePath, filename)
+        # Writing data to CSV file
+        print(csv_data, file=open(outputfilename,"w+", newline=""))
+        
+        print("File Exported: %r; Test Date: %r; Responses: %r" % (outputfilename, date, str(recipients)))
+        
+        if write_to_db(data, split_data) == True:
+            print('The data was inserted successully\n')
+            mail_to = ''
+            mail_subject = 'Phishing data imported successfully'
+            mail_body = "Phishing camptaign: " + title + " Loaded to database"
+            send_email(mail_to, mail_subject, mail_body)
+        else:
+            print('Error inserting data')
+            mail_to = ''
+            mail_subject = 'Phishing data encountered an error'
+            mail_body = "Phishing camptaign: " + title + "\nProcess halted.  \nErrors occured during the database load.  \nSee error message for details.\n"
+            send_email(mail_to, mail_subject, mail_body)
+            
+        #write_to_db(data, col_headers)
+        #print(len(data))
+        #print(data[100])
+        
+        
+    else:
+        print("\nProcess halted.  \nErrors found in CSV headers, either extra fields or missing fields.  \nSee error message for details.\n")
+        mail_to = ''
+        mail_subject = 'Phishing data encountered an error'
+        mail_body = "Phishing camptaign: " + title + "\nProcess halted.  \nErrors found in CSV headers, either extra fields or missing fields.  \nSee error message for details.\n"
+        send_email(mail_to, mail_subject, mail_body)
+      
+    
+ 
+    
+#######################################################
+#######################################################
+###############   Write URI results ###################
+###############   to DB             ###################
+#######################################################
+def write_to_db(data, split_data):
+    
+    i = 0
+    conn = pyodbc.connect('Driver={SQL Server};'
+                          'Server=;'
+                          'Database=;'
+                          'Trusted_Connection=;')
+    cursor = conn.cursor()
+    nlines = data.count('\n')
+    print('Attempting to write data to database')
+    print("Number of lines: " + str(nlines))
+        
+    try:
+        #for i in data.split('\n'):
+        #    list = print([i])
+        list_of_lines = data.splitlines(True)
+        
+        new_split_data = []
+        for x in split_data:
+            x = x.replace("\r","")
+            x = x.replace(" ", "")
+            x = x.replace("OpenedEmail?", "OpenedEmail")
+            x = x.replace("TimetoReport(inseconds)", "TimetoReport")
+            x = x.replace("ClickedLink?", "ClickedLink")
+            x = x.replace("EnteredPassword?", "EnteredPassword")
+            x = x.replace("User-Agent", "UserAgent")
+            x = x.replace("Mobile?", "Mobile")
+            x = x.replace("ReportedPhish?", "ReportedPhish")
+            x = x.replace("MISC.", "Misc")
+            x = x.replace("SUPERVISOR", "Supervisor")
+            x = x.replace("DIVISION", "Division")
+            x = x.replace("SubmittedFormTimestamp", "SubmittedFormDateTime")
+            x = x.replace("EXECUTIVE", "Executive")
+            x = x.replace("1DownFromExecutive", "OneDownFromExecutive")
+            x = x.replace("HRAdminEmailAddress", "HRAdminEmail")
+            x = x.replace("SupervisorEmailAddress", "SupervisorEmail")
+            x = x.replace("SecondsSpentonEducationPage", "SecsSpentonEducationPage")
+            x = x.replace("LastEmailStatusTimestamp", "LastEmailStatusDateTime")
+            x = x.replace("ReportedPhishTimestamp", "ReportedPhishDateTime")
+            x = x.replace("OpenedEmailTimestamp", "OpenedEmailDateTime")
+            x = x.replace("ClickedLinkTimestamp", "ClickedLinkDateTime")
+            x = x.replace("[Location]State", "LocationState")  
+            new_split_data.append("[" + x + "]")            
+        
+        db_columns = ",".join(map(str,new_split_data))
+        
+        list_of_lines_nbr=len(list_of_lines)
+        # Outer loop to get each row of large dataset from cofense
+        for i in range(1, list_of_lines_nbr):   
+            ith_line = list_of_lines[i]
+            #print(list_of_lines[i])
+            ith_line = ith_line.replace("\n","")
+            ith_line = ith_line.replace("\r","")
+            ith_line = ith_line.replace(",","\",\"")
+            new_list = re.findall(r'(?:[^,"]|"(?:\\.|[^"])*")+', list_of_lines[i])  
+            list_len = len(new_list)
+            
+            # database object
+            cursor = conn.cursor()
+            
+            # create a list of individual fields for each row.
+            # these will be used later to reformat them in a way SQL Server can consume
+            field_data = []
+            
+            # Skipped row 0 since that is the header
+            for i in range(0,list_len):
+                body=new_list[i].replace("\"","'")
+                body=body.replace("'","")
+                body=body.replace("\r","")
+                body=body.replace("\n","")
+                field_data.append(body)
+                
+            columns = str(db_columns)
+            fields = str(field_data)
+            
+            columns_count = len(db_columns)
+            fields_count = len(field_data)
+            
+            columns = columns.replace("'","")
+            columns = columns.replace("[[","[")    
+            columns = columns.replace("]]","]")    
+            
+            fields = fields.strip("'")
+            fields = fields.strip("[")
+            fields = fields.strip("]")
+            
+            cursor.execute("INSERT INTO [db].[table]("+ columns +") VALUES (" + fields + ")")
+            cursor.commit()
+            
+        
+        return True    
+    except:        
+        
+        return False
+    
+
+
+
+#######################################################
+#######################################################
+###############   CSV Test Function ###################
+#######################################################
+#######################################################
+def test_CSV(split_data):
+    
+    # list of expected headers for CSV file.  Will be compared to ensure we do not
+    #  receive extra headers or there are no missing headers
+    col_headers_nbr = len(split_data) #split_data.count(",") + 1
+    a = 0
+    b = 0
+   
+
+    try:
+        # Ensure fields in CSV header are in list of expected fields
+        for x in range(0, col_headers_nbr):
+            yy = str(split_data[x].strip().lower())
+            yy = re.sub(r'[^{0}\n]'.format(string.printable), '', yy)   
+            yy = yy.replace("\n","")
+            yy = yy.replace("\r","")
+            yy = yy.replace("?","")
+            
+            
+            if any(yy in csv_set for yy in (csv_set)):
+                a +=0
+            
+            else:
+                a += 1
+                #print("New Field: " + yy)
+                list_of_new_fields.append(yy)
+        
+        print('Number of errors in CSV file header:', a)
+        
+        # list out any missing fields for further research
+        #print(csv_set_nbr)
+        for val in csv_set:
+            if val in split_data:
+                b += 0
+                    #print(val + " found in split_data")
+            else:
+                b += 1
+                #print("Missing Field: " + val)
+                list_of_missing_fields.append(val)
+
+        #print(b)
+        #print(list_of_missing_fields)
+        #print(list_of_new_fields)
+        
+        if a == 0:
+            return True
+        else:
+            #print(a)
+            mail_to = ''
+            mail_subject = 'Cofense - New or missing data encountered during load'
+            mail_body = 'Missing fields: ' + str(list_of_missing_fields) + '\nNew Fields: ' + str(list_of_new_fields)
+            send_email(mail_to, mail_subject, mail_body)
+            return False
+            #return True
+            
+    except:  
+        pass # Catch exception but pass it so all errors can be captured and logged
+
+
+
+
+
+#######################################################
+#######################################################
+##################  SEND EMAIL ########################
+#######################################################
+#######################################################
+def send_email(mail_to, mail_subject, mail_body):     
+    
+    outlook = win32.Dispatch('outlook.application')
+    mail = outlook.CreateItem(0)
+    mail.To = mail_to 
+    mail.Subject = mail_subject
+    mail.Body = mail_body# 'Missing fields: ' + str(list_of_missing_fields) + '\nNew Fields: ' + str(list_of_new_fields)
+    #mail.HTMLBody = '<h2>HTML Message body</h2>' #this field is optional
+    # To attach a file to the email (optional):
+    #attachment  = "Path to the attachment"
+    #mail.Attachments.Add(attachment)
+    mail.Send()
+
+
+    
+#######################################################
+#######################################################
+##################   MAIN PROGRAM #####################
+#######################################################
+#######################################################
+if sys.version_info < (3,):
+    from cStringIO import StringIO
+else:
+    from io import StringIO
+    xrange = range
+from tokenize import generate_tokens
+
+# initialize global variables 
+# used in error handling HTTPError loop        
+int = 0
+title = ""
+# Get token code from profile page on CoFense website.  Is specific to login user
+APItoken=input("Enter API Token: ")
+filePath = ""
+list_of_new_fields = []
+list_of_missing_fields = []
+list = []
+    
+change = input("The Default file path is: " + filePath + "\nDo you wish to export to a different location? (Yes/No) ")
+validInput = False
+
+while validInput == False:
+    if change.lower() == "no":
+        validInput = True
+    elif change.lower() == "yes":
+        filePath = input("Enter the new filepath here: ")
+        print("You entered: %r" %(filePath))
+        validInput = True
+    else:
+        change = input("Enter either Yes or No only. ")
+        validInput = False
+    
+
+    
+
+# used in field validation in API call.  Will compare the list below to list of fields found in API call
+Schema = Schema({
+             'id': And(str), 
+             'title': And(str), 
+             'scenario_type': And(str), 
+             'date_started': And(str), 
+             'date_finished':  And(str), 
+             'responses': And(Use(float)), 
+             'full_csv_url':  And(str), 
+             'recipients': And(Use(float)),  
+             'notes': And(str)
+             })
+
+csv_set = {"Email", "Recipient Name", "Recipient Group", "Department", "Location", "Opened Email", "Opened Email Timestamp",
+           "Clicked Link", "Clicked Link Timestamp", "Submitted Form", "Username", "Entered Password", "Submitted Form Timestamp",
+           "Reported Phish", "New/Repeat Reporter", "Reported Phish Timestamp", "Time to Report (in seconds)", "Remote IP",
+           "GeoIP Country", "GeoIP City", "GeoIP ISP","Last DSN","Last Email Status","Last Email Status Timestamp","Language",
+           "Browser", "User-Agent", "Mobile?", "Seconds Spent on Education Page", "SUPERVISOR", "DIVISION", "EXECUTIVE", "MISC.",
+           "Location State", "Employee Number", "Job Name", "Supervisor Email Address", "1 Down From Executive",
+           "Employment Category", "Date Of Hire", "Length Of Service", "Work At Home", "HR Admin Email Address", "Submitted Data",
+           'Mobile?', 'Opened Email?', 'Clicked Link?', 'Reported Phish?'}
+
+map(str.lower, csv_set)
+    
+try:
+    print("Attempting to login into CoFense and pull most current data.")
+    API_Call()
+
+    
+    
+    
+# So far all exceptions are due to the "cooldown" time required between connections with CoFense.  
+# Process will loop 3 times and wait 30 seconds between attempts between failures.
+except urllib.error.HTTPError as e:
+    print("Process Failed with error: ")
+    print(e)
+    int +=1
+    if int < 4:
+        print("Waiting 30 seconds and will try again")
+        time.sleep(30)
+        print("Processing attempt #" + str(int+1))
+        API_Call()
+    else:
+        print("Process already attempted twice.  Please try again later.")
+
+
+except SchemaError as se:
+    print(se)
+    int +=1
+    if int < 4:
+        print("Waiting 30 seconds and will try again")
+        time.sleep(30)
+        print("Processing attempt #" + str(int+1))
+        API_Call()
+    else:
+        print("Process already attempted twice.  Please try again later.")
+
+        
+
+except Exception as err:    
+    print(err)
+    int +=1
+    if int < 4:
+        print("Waiting 30 seconds and will try again")
+        time.sleep(30)
+        print("Processing attempt #" + str(int+1))
+        API_Call()
+    else:
+        print("Process already attempted twice.  Please try again later.")
+
